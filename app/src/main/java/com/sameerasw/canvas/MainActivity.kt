@@ -158,28 +158,18 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            val themeMode = remember { mutableStateOf(SettingsRepository.getThemeMode()) }
-
-            // Monitor theme changes from settings
-            LaunchedEffect(Unit) {
-                while (true) {
-                    kotlinx.coroutines.delay(500)
-                    val currentTheme = SettingsRepository.getThemeMode()
-                    if (currentTheme != themeMode.value) {
-                        themeMode.value = currentTheme
-                    }
-                }
-            }
-
-            com.sameerasw.canvas.ui.theme.CanvasThemeWithMode(themeMode = themeMode.value) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    val backgroundImageUri by viewModel.backgroundImageUri.collectAsState()
-                    CanvasApp(viewModel, backgroundImageUri)
-                }
-            }
+            // fork: the redesigned UI lives in com.sameerasw.canvas.fork (see CLAUDE.md).
+            // Upstream's CanvasApp below is kept unchanged but unused, so syncs merge cleanly.
+            com.sameerasw.canvas.fork.ForkCanvasRoot(
+                viewModel = viewModel,
+                onPickBackground = {
+                    pickBackgroundImageLauncher.launch(
+                        androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onRequestNotesRole = { requestNotesRole() },
+                onLaunchContentCapture = { launchContentCapture() }
+            )
         }
     }
 
