@@ -34,3 +34,6 @@ replay_pid*
 app/release
 local.properties
 build/reports/problems/problems-report.html
+
+# droid fork: the Gradle wrapper jar is needed so ./gradlew works in CI
+!gradle/wrapper/gradle-wrapper.jar
