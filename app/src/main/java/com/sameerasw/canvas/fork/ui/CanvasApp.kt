@@ -1,4 +1,4 @@
-package com.sameerasw.canvas.ui
+package com.sameerasw.canvas.fork.ui
 
 import android.content.Intent
 import android.graphics.Bitmap
@@ -68,26 +68,25 @@ import androidx.compose.ui.unit.dp
 import com.sameerasw.canvas.CanvasViewModel
 import com.sameerasw.canvas.CropActivity
 import com.sameerasw.canvas.R
-import com.sameerasw.canvas.SettingsActivity
-import com.sameerasw.canvas.SettingsRepository
+import com.sameerasw.canvas.fork.settings.ForkSettingsActivity
+import com.sameerasw.canvas.CanvasModel
+import com.sameerasw.canvas.fork.ForkSettings
 import com.sameerasw.canvas.data.TextItem
 import com.sameerasw.canvas.model.PenStyle
 import com.sameerasw.canvas.model.ShapeType
 import com.sameerasw.canvas.model.ToolType
 import com.sameerasw.canvas.ui.components.NotesRolePanel
-import com.sameerasw.canvas.ui.components.chrome.CanvasTopBar
-import com.sameerasw.canvas.ui.components.chrome.ToolDock
-import com.sameerasw.canvas.ui.components.chrome.ToolOptionsPanel
-import com.sameerasw.canvas.ui.components.dialogs.TextInputDialog
-import com.sameerasw.canvas.ui.components.dialogs.TextOptionsDialog
+import com.sameerasw.canvas.fork.ui.chrome.CanvasTopBar
+import com.sameerasw.canvas.fork.ui.chrome.ToolDock
+import com.sameerasw.canvas.fork.ui.chrome.ToolOptionsPanel
+import com.sameerasw.canvas.fork.ui.dialogs.ForkTextInputDialog
+import com.sameerasw.canvas.fork.ui.dialogs.ForkTextOptionsDialog
 import com.sameerasw.canvas.ui.components.sheets.AboutBottomSheet
 import com.sameerasw.canvas.ui.drawing.BitmapExportHelper
 import com.sameerasw.canvas.ui.drawing.BitmapStorageHelper
 import com.sameerasw.canvas.ui.modifiers.BlurDirection
 import com.sameerasw.canvas.ui.modifiers.progressiveBlur
-import com.sameerasw.canvas.ui.screens.DrawingCanvasScreen
-import com.sameerasw.canvas.ui.state.rememberCanvasViewportState
-import com.sameerasw.canvas.ui.theme.isAppInDarkTheme
+import com.sameerasw.canvas.fork.ui.theme.isAppInDarkTheme
 import com.sameerasw.canvas.util.GsonProvider
 import com.sameerasw.canvas.utils.HapticUtil
 import kotlinx.coroutines.launch
@@ -124,9 +123,9 @@ fun CanvasApp(
     val isNotesRoleHeld by viewModel.isNotesRoleHeld.collectAsState()
 
     // Settings
-    val canvasBackground by SettingsRepository.canvasBackground.collectAsState()
-    val autoHideUi by SettingsRepository.autoHideUi.collectAsState()
-    val fingerGestures by SettingsRepository.fingerGestures.collectAsState()
+    val canvasBackground by ForkSettings.canvasBackground.collectAsState()
+    val autoHideUi by ForkSettings.autoHideUi.collectAsState()
+    val fingerGestures by ForkSettings.fingerGestures.collectAsState()
 
     // Tools (survive rotation)
     val dark = isAppInDarkTheme()
@@ -245,7 +244,7 @@ fun CanvasApp(
                     direction = BlurDirection.BOTTOM
                 )
         ) {
-            DrawingCanvasScreen(
+            CanvasSurface(
                 viewport = viewport,
                 currentTool = currentTool,
                 strokes = strokes,
@@ -265,8 +264,17 @@ fun CanvasApp(
                     .fillMaxSize()
                     .onSizeChanged { canvasViewSize = it },
                 onAddStroke = { viewModel.addStroke(it) },
-                onRemoveStrokes = { recordUndo, predicate -> viewModel.removeStroke(recordUndo, predicate) },
-                onRemoveText = { id, recordUndo -> viewModel.removeText(id, recordUndo) },
+                onErase = { erased, textIds ->
+                    // One undo step for the whole eraser swipe, using upstream's public API only
+                    val remaining = strokes.filterNot { it in erased }
+                    if (textIds.isEmpty()) {
+                        viewModel.setStrokes(remaining)
+                    } else {
+                        viewModel.importCanvasState(
+                            CanvasModel(remaining, texts.filterNot { it.id in textIds }, backgroundImageUri)
+                        )
+                    }
+                },
                 onTextTap = { world, hitId ->
                     if (hitId != null) {
                         selectedTextId = hitId
@@ -278,7 +286,9 @@ fun CanvasApp(
                         showTextDialog = true
                     }
                 },
-                onMoveText = { id, x, y -> viewModel.moveText(id, x, y) },
+                onMoveText = { id, x, y ->
+                    texts.firstOrNull { it.id == id }?.let { viewModel.updateText(it.copy(x = x, y = y)) }
+                },
                 onUndo = {
                     if (canUndo) {
                         viewModel.undo()
@@ -335,7 +345,7 @@ fun CanvasApp(
                 message(context.getString(R.string.msg_ink_inverted), undoable = true)
             },
             onClear = { showClearConfirm = true },
-            onSettings = { context.startActivity(Intent(context, SettingsActivity::class.java)) },
+            onSettings = { context.startActivity(Intent(context, ForkSettingsActivity::class.java)) },
             onAbout = { showAbout = true },
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -469,7 +479,7 @@ fun CanvasApp(
         )
     }
 
-    TextOptionsDialog(
+    ForkTextOptionsDialog(
         visible = showTextOptions,
         text = texts.firstOrNull { it.id == selectedTextId }?.text.orEmpty(),
         onEdit = {
@@ -491,7 +501,7 @@ fun CanvasApp(
         }
     )
 
-    TextInputDialog(
+    ForkTextInputDialog(
         visible = showTextDialog,
         isEditing = selectedTextId != null,
         currentValue = pendingTextValue,

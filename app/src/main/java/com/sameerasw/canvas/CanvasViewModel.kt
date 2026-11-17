@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 import androidx.annotation.Keep
 
@@ -75,10 +76,13 @@ class CanvasViewModel(application: Application) : AndroidViewModel(application) 
         updateBlurState()
         registerPowerSaveReceiver()
         
-        // React to the blur setting changing (no polling)
-        SettingsRepository.useBlur
-            .onEach { updateBlurState() }
-            .launchIn(viewModelScope)
+        // Monitor settings changes
+        viewModelScope.launch {
+            while (true) {
+                delay(1000)
+                updateBlurState()
+            }
+        }
 
         // Reactively observe database changes
         repository.canvasFlow
@@ -114,20 +118,9 @@ class CanvasViewModel(application: Application) : AndroidViewModel(application) 
         _strokes.value = _strokes.value + stroke
     }
 
-    /**
-     * Removes the strokes matching [predicate]. Does nothing (and records no undo step) when
-     * nothing matches. Pass [recordUndo] = false to fold this into an undo step that was already
-     * recorded earlier in the same gesture, so one eraser swipe is undone in one go.
-     *
-     * @return whether anything was removed
-     */
-    fun removeStroke(recordUndo: Boolean = true, predicate: (DrawStroke) -> Boolean): Boolean {
-        val current = _strokes.value
-        val remaining = current.filterNot { predicate(it) }
-        if (remaining.size == current.size) return false
-        if (recordUndo) pushUndoSnapshot()
-        _strokes.value = remaining
-        return true
+    fun removeStroke(predicate: (DrawStroke) -> Boolean) {
+        pushUndoSnapshot()
+        _strokes.value = _strokes.value.filterNot { predicate(it) }
     }
 
     fun clearStrokes() {
@@ -146,19 +139,9 @@ class CanvasViewModel(application: Application) : AndroidViewModel(application) 
         _texts.value = _texts.value.map { if (it.id == updated.id) updated else it }
     }
 
-    fun removeText(id: Long, recordUndo: Boolean = true): Boolean {
-        val current = _texts.value
-        if (current.none { it.id == id }) return false
-        if (recordUndo) pushUndoSnapshot()
-        _texts.value = current.filterNot { it.id == id }
-        return true
-    }
-
-    fun moveText(id: Long, x: Float, y: Float) {
-        val current = _texts.value
-        if (current.none { it.id == id }) return
+    fun removeText(id: Long) {
         pushUndoSnapshot()
-        _texts.value = current.map { if (it.id == id) it.copy(x = x, y = y) else it }
+        _texts.value = _texts.value.filterNot { it.id == id }
     }
 
     fun clearTexts() {

@@ -1,634 +1,682 @@
 package com.sameerasw.canvas.ui.screens
 
-import android.view.MotionEvent
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculateCentroidSize
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerInputChange
-import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInteropFilter
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.LaunchedEffect
+import android.view.MotionEvent
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
-import androidx.core.net.toUri
-import com.sameerasw.canvas.SettingsRepository
-import com.sameerasw.canvas.data.TextItem
 import com.sameerasw.canvas.model.DrawStroke
-import com.sameerasw.canvas.model.PenStyle
-import com.sameerasw.canvas.model.ShapeType
 import com.sameerasw.canvas.model.StylusPoint
 import com.sameerasw.canvas.model.ToolType
-import com.sameerasw.canvas.ui.drawing.BackgroundDrawer
+import com.sameerasw.canvas.data.TextItem
 import com.sameerasw.canvas.ui.drawing.StrokeDrawer
-import com.sameerasw.canvas.ui.drawing.StrokeDrawer.drawPressureSensitiveStroke
 import com.sameerasw.canvas.ui.drawing.StrokeDrawer.drawScribbleStroke
-import com.sameerasw.canvas.ui.drawing.TextDrawer
+import com.sameerasw.canvas.ui.drawing.StrokeDrawer.drawPressureSensitiveStroke
 import com.sameerasw.canvas.ui.drawing.TextDrawer.drawStringWithFont
-import com.sameerasw.canvas.ui.state.CanvasViewportState
+import com.sameerasw.canvas.ui.drawing.BackgroundDrawer
 import com.sameerasw.canvas.utils.HapticUtil
+import com.sameerasw.canvas.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlinx.coroutines.withContext
+import androidx.core.net.toUri
 
-/** What the current touch sequence turned out to be. */
-private enum class GestureMode {
-    /** Drawing with the active tool (pen, arrow, shape, eraser). */
-    DRAW,
-
-    /** One finger moving the canvas (hand tool, or dragging empty space with the text tool). */
-    PAN,
-
-    /** Two or more fingers: pinch to zoom and pan together. */
-    TRANSFORM,
-
-    /** Text tool, finger down but not moved yet: becomes a tap, a text drag or a pan. */
-    TEXT_PENDING,
-
-    /** Moving an existing text item. */
-    TEXT_DRAG,
-
-    /** The rest of a gesture we are done with (e.g. a palm resting after the stylus lifted). */
-    IGNORE
-}
-
-/** Taps with two or three fingers shorter than this undo/redo. */
-private const val MULTI_FINGER_TAP_TIMEOUT_MS = 300L
-
-/**
- * The drawing surface.
- *
- * Gestures, all handled by one detector so they never fight each other:
- * - one finger / stylus: use the current tool (a tap with the pen leaves a dot)
- * - two fingers: pinch to zoom around the fingers and pan; a quick two-finger tap undoes
- * - three-finger tap: redo
- * - a second finger landing while a finger stroke is in progress cancels that stroke and zooms
- *   instead; while drawing with a stylus, extra touches (a resting palm) are ignored
- * - text tool: tap to add or edit text, drag a text item to move it, drag elsewhere to pan
- */
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun DrawingCanvasScreen(
-    viewport: CanvasViewportState,
     currentTool: ToolType,
     strokes: List<DrawStroke>,
     texts: List<TextItem>,
     penWidth: Float,
-    currentColor: Color,
-    currentPenStyle: PenStyle,
-    currentShapeType: ShapeType,
-    arrowWidth: Float,
-    shapeWidth: Float,
-    shapeFilled: Boolean,
-    eraserRadiusPx: Float,
-    canvasBackground: SettingsRepository.CanvasBackgroundType,
-    fingerGesturesEnabled: Boolean,
-    backgroundImageUri: String?,
+    textSize: Float,
+    currentColor: androidx.compose.ui.graphics.Color,
+    currentPenStyle: com.sameerasw.canvas.model.PenStyle,
+    currentShapeType: com.sameerasw.canvas.model.ShapeType,
+    arrowWidth: Float = 5f,
+    shapeWidth: Float = 5f,
+    shapeFilled: Boolean = false,
+    backgroundImageUri: String? = null,
     modifier: Modifier = Modifier,
-    onAddStroke: (DrawStroke) -> Unit,
-    onRemoveStrokes: (recordUndo: Boolean, predicate: (DrawStroke) -> Boolean) -> Boolean,
-    onRemoveText: (id: Long, recordUndo: Boolean) -> Boolean,
-    onTextTap: (world: Offset, hitTextId: Long?) -> Unit,
-    onMoveText: (id: Long, x: Float, y: Float) -> Unit,
-    onUndo: () -> Unit,
-    onRedo: () -> Unit,
-    onDrawingChange: (Boolean) -> Unit,
-    onStylusButtonPressed: () -> Unit
+    onAddStroke: ((DrawStroke) -> Unit)? = null,
+    onRemoveStroke: ((predicate: (DrawStroke) -> Boolean) -> Unit)? = null,
+    onRemoveText: ((Long) -> Unit)? = null,
+    onShowTextDialog: ((Boolean, Offset) -> Unit)? = null,
+    onShowTextOptions: ((Boolean, Long?) -> Unit)? = null,
+    onUpdateCanvasTransform: ((scale: Float, offsetX: Float, offsetY: Float) -> Unit)? = null,
+    onStylusButtonPressed: (() -> Unit)? = null
 ) {
     val haptics = LocalHapticFeedback.current
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    // The gesture loop is started once; it reads the latest values through these.
-    val tool by rememberUpdatedState(currentTool)
-    val strokeColor by rememberUpdatedState(currentColor)
-    val penWidthNow by rememberUpdatedState(penWidth)
-    val penStyle by rememberUpdatedState(currentPenStyle)
-    val shapeType by rememberUpdatedState(currentShapeType)
-    val arrowWidthNow by rememberUpdatedState(arrowWidth)
-    val shapeWidthNow by rememberUpdatedState(shapeWidth)
-    val shapeFilledNow by rememberUpdatedState(shapeFilled)
-    val eraserRadius by rememberUpdatedState(eraserRadiusPx)
-    val textsNow by rememberUpdatedState(texts)
-    val fingerGestures by rememberUpdatedState(fingerGesturesEnabled)
-    val addStroke by rememberUpdatedState(onAddStroke)
-    val removeStrokes by rememberUpdatedState(onRemoveStrokes)
-    val removeText by rememberUpdatedState(onRemoveText)
-    val textTap by rememberUpdatedState(onTextTap)
-    val moveText by rememberUpdatedState(onMoveText)
-    val undo by rememberUpdatedState(onUndo)
-    val redo by rememberUpdatedState(onRedo)
-    val drawingChange by rememberUpdatedState(onDrawingChange)
-    val stylusButton by rememberUpdatedState(onStylusButtonPressed)
-
-    // In-progress stroke, in world coordinates
     val currentStroke = remember { mutableStateListOf<Offset>() }
     val currentStylusPoints = remember { mutableStateListOf<StylusPoint>() }
-    var strokeIsStylus by remember { mutableStateOf(false) }
-    var activeTool by remember { mutableStateOf<ToolType?>(null) }
-    var eraserCursor by remember { mutableStateOf<Offset?>(null) }
-    var draggingTextId by remember { mutableStateOf<Long?>(null) }
-    var textDragDelta by remember { mutableStateOf(Offset.Zero) }
-    val stylusButtonDown = remember { mutableStateOf(false) }
+    val isCurrentStrokeFromStylus = remember { mutableStateOf(false) }
+    val isStylusButtonPressed = remember { mutableStateOf(false) }
+    val eraserRadius = 30f
+    val shapeStartPoint = remember { mutableStateOf<Offset?>(null) }
 
-    // Background image
-    var bgImage by remember(backgroundImageUri) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(backgroundImageUri) {
-        val uriString = backgroundImageUri ?: run { bgImage = null; return@LaunchedEffect }
-        try {
-            bgImage = withContext(Dispatchers.IO) {
-                context.contentResolver.openInputStream(uriString.toUri())?.use {
-                    android.graphics.BitmapFactory.decodeStream(it)
-                }?.asImageBitmap()
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("DrawingCanvasScreen", "Error loading background image", e)
-        }
+    val scale = remember { mutableStateOf(1f) }
+    val offsetX = remember { mutableStateOf(0f) }
+    val offsetY = remember { mutableStateOf(0f) }
+    val drawingHapticJob = remember { mutableStateOf<Job?>(null) }
+    val lastMoveTime = remember { mutableStateOf(0L) }
+    val lastMovePos = remember { mutableStateOf(Offset.Zero) }
+    val currentSpeed = remember { mutableStateOf(0f) }
+
+    // Logic to load background image
+    val bgImage = remember(backgroundImageUri) {
+        mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
     }
 
-    fun hitText(world: Offset, slop: Float): TextItem? =
-        textsNow.lastOrNull { TextDrawer.bounds(context, it).inflate(slop).contains(world) }
-
-    fun strokeHit(stroke: DrawStroke, world: Offset, threshold: Float): Boolean {
-        val pts = stroke.points
-        if (pts.isEmpty()) return false
-        if ((stroke.isArrow || stroke.shapeType != null) && pts.size >= 2) {
-            val a = pts.first()
-            val b = pts.last()
-            return world.x in (minOf(a.x, b.x) - threshold)..(maxOf(a.x, b.x) + threshold) &&
-                world.y in (minOf(a.y, b.y) - threshold)..(maxOf(a.y, b.y) + threshold)
+    LaunchedEffect(backgroundImageUri) {
+        backgroundImageUri?.let { uriString ->
+            val uri = uriString.toUri()
+            try {
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                    val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+                    if (bitmap != null) {
+                        bgImage.value = bitmap.asImageBitmap()
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DrawingCanvasScreen", "Error loading background image", e)
+            }
+        } ?: run {
+            bgImage.value = null
         }
-        if (pts.size == 1) return hypot(world.x - pts[0].x, world.y - pts[0].y) < threshold
-        for (i in 0 until pts.size - 1) {
-            val p1 = pts[i]
-            val p2 = pts[i + 1]
-            val dx = p2.x - p1.x
-            val dy = p2.y - p1.y
-            val lenSq = dx * dx + dy * dy
-            val t = if (lenSq == 0f) 0f else
-                (((world.x - p1.x) * dx + (world.y - p1.y) * dy) / lenSq).coerceIn(0f, 1f)
-            if (hypot(world.x - (p1.x + t * dx), world.y - (p1.y + t * dy)) < threshold) return true
-        }
-        return false
     }
 
     Canvas(
         modifier = modifier
             .pointerInteropFilter { event ->
-                // S Pen side button: toggles pen/eraser, and erases while held
+                // Detect S Pen button press from raw MotionEvent api thingy that took me years to find ( Minutes )
                 if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
-                    val pressed = (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
-                    val was = stylusButtonDown.value
-                    stylusButtonDown.value = pressed
-                    if (pressed && !was) stylusButton()
+                    val isButtonPressed =
+                        (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+                    val wasPressed = isStylusButtonPressed.value
+                    isStylusButtonPressed.value = isButtonPressed
+
+                    // Trigger callback when button state changes
+                    if (isButtonPressed && !wasPressed) {
+                        onStylusButtonPressed?.invoke()
+                    }
                 }
-                false // never consume: the gesture detector below still sees everything
+                false // Don't consume the event, let other handlers process it hehe
             }
-            .pointerInput(Unit) {
-                val slop = viewConfiguration.touchSlop
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val isStylus = down.type == PointerType.Stylus || down.type == PointerType.Eraser
-                    val effectiveTool = when {
-                        down.type == PointerType.Eraser || stylusButtonDown.value -> ToolType.ERASER
-                        else -> tool
+            .pointerInput(currentTool) {
+                detectTransformGestures { centroid, pan, zoom, _ ->
+                    // Only allow transform gestures when not actively drawing with other tools
+                    if (currentTool == ToolType.HAND || zoom != 1f) {
+                        val zoomSensitivity = 1.6f
+                        val effectiveZoom = 1f + (zoom - 1f) * zoomSensitivity
+                        val prevScale = scale.value
+                        val newScale = (scale.value * effectiveZoom).coerceIn(0.25f, 6f)
+                        val worldCx = (centroid.x - offsetX.value) / prevScale
+                        val worldCy = (centroid.y - offsetY.value) / prevScale
+                        scale.value = newScale
+                        offsetX.value = centroid.x - worldCx * newScale + pan.x
+                        offsetY.value = centroid.y - worldCy * newScale + pan.y
+                        onUpdateCanvasTransform?.invoke(newScale, offsetX.value, offsetY.value)
                     }
-                    val downWorld = viewport.toWorld(down.position)
-                    val primaryId = down.id
-                    val startTime = down.uptimeMillis
-                    var lastTime = startTime
-                    var maxPointers = 1
-                    var travel = 0f
-                    var transformTravel = 0f
-                    var drawingNotified = false
-                    var erasedThisGesture = false
-                    var hapticJob: Job? = null
-                    var speed = 0f
-                    var lastSpeedTime = startTime
-                    var lastSpeedPos = down.position
-                    val textHit = if (effectiveTool == ToolType.TEXT) {
-                        hitText(downWorld, slop / viewport.scale)
-                    } else null
-
-                    fun eraseAt(screen: Offset) {
-                        eraserCursor = screen
-                        val world = viewport.toWorld(screen)
-                        val threshold = eraserRadius / viewport.scale
-                        // Only the first removal in a gesture records an undo step
-                        var removed = removeStrokes(!erasedThisGesture) { strokeHit(it, world, threshold) }
-                        if (removed) erasedThisGesture = true
-                        textsNow.filter {
-                            TextDrawer.bounds(context, it).inflate(threshold).contains(world)
-                        }.forEach {
-                            if (removeText(it.id, !erasedThisGesture)) {
-                                erasedThisGesture = true
-                                removed = true
-                            }
-                        }
-                        if (removed) HapticUtil.performFadeOut(haptics)
-                    }
-
-                    fun addPoint(change: PointerInputChange, position: Offset) {
-                        val world = viewport.toWorld(position)
-                        currentStroke.add(world)
-                        if (isStylus) {
-                            currentStylusPoints.add(
-                                StylusPoint(world, change.pressure.coerceIn(0f, 1f), 0f, 0f)
-                            )
-                        }
-                    }
-
-                    fun clearStroke() {
+                }
+            }
+            .pointerInput(
+                currentTool,
+                penWidth,
+                textSize,
+                currentColor,
+                currentPenStyle,
+                currentShapeType,
+                arrowWidth,
+                shapeWidth,
+                shapeFilled
+            ) {
+                detectDragGestures(
+                    onDragStart = { offset ->
                         currentStroke.clear()
                         currentStylusPoints.clear()
-                        activeTool = null
-                        eraserCursor = null
+                        val worldStart = Offset(
+                            (offset.x - offsetX.value) / scale.value,
+                            (offset.y - offsetY.value) / scale.value
+                        )
+                        currentStroke.add(worldStart)
+                    },
+                    onDrag = { change: PointerInputChange, _ ->
+                        // Detect stylus input
+                        val isStylus =
+                            change.type == PointerType.Stylus || change.type == PointerType.Eraser
+                        isCurrentStrokeFromStylus.value = isStylus
+
+                        // Capture stylus data if available
+                        if (isStylus) {
+                            val worldPos = Offset(
+                                (change.position.x - offsetX.value) / scale.value,
+                                (change.position.y - offsetY.value) / scale.value
+                            )
+                            val pressure = change.pressure.coerceIn(0f, 1f)
+                            currentStylusPoints.add(StylusPoint(worldPos, pressure, 0f, 0f))
+                        }
+                        val worldPos = Offset(
+                            (change.position.x - offsetX.value) / scale.value,
+                            (change.position.y - offsetY.value) / scale.value
+                        )
+
+                        // Determine effective tool (use eraser if button is pressed)
+                        val effectiveTool =
+                            if (isStylusButtonPressed.value) ToolType.ERASER else currentTool
+
+                        if (effectiveTool == ToolType.HAND) {
+                            offsetX.value += change.position.x - change.previousPosition.x
+                            offsetY.value += change.position.y - change.previousPosition.y
+                            onUpdateCanvasTransform?.invoke(
+                                scale.value,
+                                offsetX.value,
+                                offsetY.value
+                            )
+                        } else {
+                            currentStroke.add(worldPos)
+                            val now = System.currentTimeMillis()
+                            val pos = change.position
+                            if (lastMoveTime.value == 0L) {
+                                val prevPos = change.previousPosition
+                                val dist = hypot(pos.x - prevPos.x, pos.y - prevPos.y)
+                                val assumedDt = 16L
+                                val instSpeed = (dist / assumedDt) * 1000f
+                                currentSpeed.value = instSpeed
+                                lastMoveTime.value = now
+                                lastMovePos.value = pos
+                            } else {
+                                val dt = (now - lastMoveTime.value).coerceAtLeast(1L)
+                                val dist =
+                                    hypot(pos.x - lastMovePos.value.x, pos.y - lastMovePos.value.y)
+                                val instSpeed = (dist / dt) * 1000f
+                                currentSpeed.value = currentSpeed.value * 0.6f + instSpeed * 0.4f
+                                lastMoveTime.value = now
+                                lastMovePos.value = pos
+                            }
+
+                            if (effectiveTool == ToolType.PEN && drawingHapticJob.value == null) {
+                                drawingHapticJob.value = CoroutineScope(Dispatchers.Main).launch {
+                                    val minInterval = 10L
+                                    val maxInterval = 450L
+                                    val speedForMax = 300f
+                                    val stationaryThreshold = 60f
+                                    while (isActive) {
+                                        val sp = currentSpeed.value
+                                        if (sp < stationaryThreshold) {
+                                            delay(180L)
+                                            continue
+                                        }
+                                        val t =
+                                            ((maxInterval - minInterval) * (1f - (sp.coerceAtMost(
+                                                speedForMax
+                                            ) / speedForMax))).toLong() + minInterval
+                                        HapticUtil.performLightTick(haptics)
+                                        delay(max(20L, t))
+                                    }
+                                }
+                            }
+
+                            when (effectiveTool) {
+                                ToolType.ERASER -> {
+                                    val worldThreshold = eraserRadius / scale.value
+                                    var removedAny = false
+                                    onRemoveStroke?.invoke { stroke ->
+                                        val hit = when {
+                                            // For shapes and arrows, check bounding box and geometry
+                                            stroke.isArrow || stroke.shapeType != null -> {
+                                                if (stroke.points.size >= 2) {
+                                                    val start = stroke.points.first()
+                                                    val end = stroke.points.last()
+                                                    // Check if eraser touches the line/shape
+                                                    val minX = kotlin.math.min(
+                                                        start.x,
+                                                        end.x
+                                                    ) - worldThreshold
+                                                    val maxX = kotlin.math.max(
+                                                        start.x,
+                                                        end.x
+                                                    ) + worldThreshold
+                                                    val minY = kotlin.math.min(
+                                                        start.y,
+                                                        end.y
+                                                    ) - worldThreshold
+                                                    val maxY = kotlin.math.max(
+                                                        start.y,
+                                                        end.y
+                                                    ) + worldThreshold
+                                                    worldPos.x in minX..maxX && worldPos.y in minY..maxY
+                                                } else false
+                                            }
+                                            // For regular strokes, check all line segments
+                                            else -> {
+                                                stroke.points.any { point ->
+                                                    val distance = hypot(
+                                                        worldPos.x - point.x,
+                                                        worldPos.y - point.y
+                                                    )
+                                                    distance < worldThreshold
+                                                } || stroke.points.zipWithNext().any { (p1, p2) ->
+                                                    // Check distance to line segment
+                                                    val dx = p2.x - p1.x
+                                                    val dy = p2.y - p1.y
+                                                    val lengthSquared = dx * dx + dy * dy
+                                                    if (lengthSquared == 0f) {
+                                                        hypot(
+                                                            worldPos.x - p1.x,
+                                                            worldPos.y - p1.y
+                                                        ) < worldThreshold
+                                                    } else {
+                                                        val t =
+                                                            ((worldPos.x - p1.x) * dx + (worldPos.y - p1.y) * dy) / lengthSquared
+                                                        val clampedT = t.coerceIn(0f, 1f)
+                                                        val closestX = p1.x + clampedT * dx
+                                                        val closestY = p1.y + clampedT * dy
+                                                        hypot(
+                                                            worldPos.x - closestX,
+                                                            worldPos.y - closestY
+                                                        ) < worldThreshold
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (hit) removedAny = true
+                                        hit
+                                    }
+
+                                    onRemoveText?.let { removeText ->
+                                        val toRemove = texts.filter { text ->
+                                            val dx = worldPos.x - text.x
+                                            val dy = worldPos.y - text.y
+                                            val distance = hypot(dx, dy)
+                                            distance < worldThreshold + (text.size * 0.5f)
+                                        }.map { it.id }
+
+                                        if (toRemove.isNotEmpty()) removedAny = true
+                                        toRemove.forEach { id -> removeText(id) }
+                                    }
+
+                                    if (removedAny) {
+                                        HapticUtil.performFadeOut(haptics)
+                                    }
+                                }
+
+                                else -> {}
+                            }
+                        }
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        // Don't save strokes if button was pressed (eraser mode)
+                        if (!isStylusButtonPressed.value) {
+                            when (currentTool) {
+                                ToolType.PEN -> {
+                                    if (currentStroke.size >= 2) {
+                                        val newStroke = DrawStroke(
+                                            currentStroke.toList(),
+                                            currentColor,
+                                            width = penWidth,
+                                            style = currentPenStyle,
+                                            stylusPoints = if (isCurrentStrokeFromStylus.value && currentStylusPoints.isNotEmpty())
+                                                currentStylusPoints.toList() else null,
+                                            isFromStylus = isCurrentStrokeFromStylus.value
+                                        )
+                                        onAddStroke?.invoke(newStroke)
+                                    }
+                                }
+
+                                ToolType.ARROW -> {
+                                    if (currentStroke.size >= 2) {
+                                        val start = currentStroke.first()
+                                        val end = currentStroke.last()
+                                        val newStroke = DrawStroke(
+                                            listOf(start, end),
+                                            currentColor,
+                                            width = arrowWidth,
+                                            isArrow = true,
+                                            stylusPoints = if (isCurrentStrokeFromStylus.value && currentStylusPoints.size >= 2)
+                                                listOf(
+                                                    currentStylusPoints.first(),
+                                                    currentStylusPoints.last()
+                                                ) else null,
+                                            isFromStylus = isCurrentStrokeFromStylus.value
+                                        )
+                                        onAddStroke?.invoke(newStroke)
+                                    }
+                                }
+
+                                ToolType.SHAPE -> {
+                                    if (currentStroke.size >= 2) {
+                                        val start = currentStroke.first()
+                                        val end = currentStroke.last()
+                                        val newStroke = DrawStroke(
+                                            listOf(start, end),
+                                            currentColor,
+                                            width = shapeWidth,
+                                            shapeType = currentShapeType,
+                                            isFilled = shapeFilled,
+                                            stylusPoints = if (isCurrentStrokeFromStylus.value && currentStylusPoints.size >= 2)
+                                                listOf(
+                                                    currentStylusPoints.first(),
+                                                    currentStylusPoints.last()
+                                                ) else null,
+                                            isFromStylus = isCurrentStrokeFromStylus.value
+                                        )
+                                        onAddStroke?.invoke(newStroke)
+                                    }
+                                }
+
+                                else -> {}
+                            }
+                        }
+                        drawingHapticJob.value?.cancel()
+                        drawingHapticJob.value = null
+                        currentSpeed.value = 0f
+                        lastMoveTime.value = 0L
+                        lastMovePos.value = Offset.Zero
+                        currentStroke.clear()
+                        currentStylusPoints.clear()
+                        isCurrentStrokeFromStylus.value = false
+                        isStylusButtonPressed.value = false
+                        shapeStartPoint.value = null
+                    },
+                    onDragCancel = {
+                        drawingHapticJob.value?.cancel()
+                        drawingHapticJob.value = null
+                        currentSpeed.value = 0f
+                        lastMoveTime.value = 0L
+                        lastMovePos.value = Offset.Zero
+                        currentStroke.clear()
+                        currentStylusPoints.clear()
+                        isCurrentStrokeFromStylus.value = false
+                        shapeStartPoint.value = null
                     }
+                )
+            }
+            .pointerInput(currentTool) {
+                detectTapGestures(
+                    onLongPress = { offset ->
+                        if (currentTool == ToolType.TEXT) {
+                            val world = Offset(
+                                (offset.x - offsetX.value) / scale.value,
+                                (offset.y - offsetY.value) / scale.value
+                            )
+                            val hit = texts.find { text ->
+                                val half = text.size
+                                world.x >= text.x - half && world.x <= text.x + half &&
+                                        world.y >= text.y - half && world.y <= text.y + half
+                            }
 
-                    fun commitStroke() {
-                        val points = currentStroke.toList()
-                        val stylusPts = currentStylusPoints.toList()
-                        val moved = travel > slop
-                        val color = strokeColor
-                        when (activeTool) {
+                            if (hit != null) {
+                                onShowTextOptions?.invoke(true, hit.id)
+                            } else {
+                                onShowTextDialog?.invoke(true, world)
+                            }
+                        }
+                    },
+                    onTap = { offset ->
+                        val world = Offset(
+                            (offset.x - offsetX.value) / scale.value,
+                            (offset.y - offsetY.value) / scale.value
+                        )
+
+                        when (currentTool) {
                             ToolType.PEN -> {
-                                val pts = if (moved && points.size >= 2) points else
-                                    listOf(downWorld, Offset(downWorld.x + 0.5f, downWorld.y + 0.5f))
-                                addStroke(
+                                val delta = 0.5f
+                                val p1 = world
+                                val p2 = Offset(world.x + delta, world.y + delta)
+                                onAddStroke?.invoke(
                                     DrawStroke(
-                                        pts,
-                                        color,
-                                        width = penWidthNow,
-                                        style = penStyle,
-                                        stylusPoints = if (isStylus && moved && stylusPts.size >= 2) stylusPts else null,
-                                        isFromStylus = isStylus && moved
+                                        listOf(p1, p2),
+                                        currentColor,
+                                        width = penWidth,
+                                        style = currentPenStyle
                                     )
                                 )
-                                if (!moved) HapticUtil.performClick(haptics)
+                                HapticUtil.performClick(haptics)
+                                return@detectTapGestures
                             }
 
-                            ToolType.ARROW -> if (moved && points.size >= 2) {
-                                addStroke(
-                                    DrawStroke(
-                                        listOf(points.first(), points.last()),
-                                        color,
-                                        width = arrowWidthNow,
-                                        isArrow = true,
-                                        stylusPoints = if (isStylus && stylusPts.size >= 2)
-                                            listOf(stylusPts.first(), stylusPts.last()) else null,
-                                        isFromStylus = isStylus
-                                    )
-                                )
-                            }
+                            ToolType.TEXT -> {
+                                // Check if tapping on existing text
+                                val hit = texts.find { text ->
+                                    val half = text.size
+                                    world.x >= text.x - half && world.x <= text.x + half &&
+                                            world.y >= text.y - half && world.y <= text.y + half
+                                }
 
-                            ToolType.SHAPE -> if (moved && points.size >= 2) {
-                                addStroke(
-                                    DrawStroke(
-                                        listOf(points.first(), points.last()),
-                                        color,
-                                        width = shapeWidthNow,
-                                        shapeType = shapeType,
-                                        isFilled = shapeFilledNow,
-                                        stylusPoints = if (isStylus && stylusPts.size >= 2)
-                                            listOf(stylusPts.first(), stylusPts.last()) else null,
-                                        isFromStylus = isStylus
-                                    )
-                                )
+                                if (hit != null) {
+                                    // Edit existing text
+                                    onShowTextOptions?.invoke(true, hit.id)
+                                } else {
+                                    // Add new text
+                                    onShowTextDialog?.invoke(true, world)
+                                }
+                                HapticUtil.performClick(haptics)
+                                return@detectTapGestures
                             }
 
                             else -> {}
                         }
-                        clearStroke()
                     }
-
-                    var mode = when (effectiveTool) {
-                        ToolType.HAND -> GestureMode.PAN
-                        ToolType.TEXT -> GestureMode.TEXT_PENDING
-                        else -> GestureMode.DRAW
-                    }
-
-                    if (mode == GestureMode.DRAW) {
-                        clearStroke()
-                        activeTool = effectiveTool
-                        strokeIsStylus = isStylus
-                        addPoint(down, down.position)
-                        if (effectiveTool == ToolType.ERASER) eraseAt(down.position)
-                        down.consume()
-                    }
-
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val pressed = event.changes.filter { it.pressed }
-                        event.changes.firstOrNull()?.let { lastTime = it.uptimeMillis }
-                        if (pressed.size > maxPointers) maxPointers = pressed.size
-
-                        // A second finger turns any finger gesture into pinch-zoom. A stylus
-                        // stroke keeps going: the extra touch is most likely a resting palm.
-                        if (pressed.size >= 2 && mode != GestureMode.TRANSFORM && mode != GestureMode.IGNORE &&
-                            !(mode == GestureMode.DRAW && isStylus)
-                        ) {
-                            if (mode == GestureMode.DRAW) {
-                                clearStroke()
-                                hapticJob?.cancel()
-                                if (drawingNotified) drawingChange(false)
-                                drawingNotified = false
-                            }
-                            draggingTextId = null
-                            textDragDelta = Offset.Zero
-                            mode = GestureMode.TRANSFORM
-                        }
-
-                        if (pressed.isEmpty()) break
-
-                        when (mode) {
-                            GestureMode.TRANSFORM -> {
-                                val zoom = event.calculateZoom()
-                                val pan = event.calculatePan()
-                                val centroid = event.calculateCentroid(useCurrent = true)
-                                if (centroid != Offset.Unspecified) {
-                                    viewport.transform(centroid, pan, zoom)
-                                }
-                                transformTravel += pan.getDistance() +
-                                    abs(1f - zoom) * event.calculateCentroidSize(useCurrent = true)
-                                event.changes.forEach { it.consume() }
-                            }
-
-                            GestureMode.PAN -> {
-                                val c = event.changes.firstOrNull { it.id == primaryId } ?: pressed.first()
-                                viewport.panBy(c.positionChange())
-                                c.consume()
-                            }
-
-                            GestureMode.TEXT_PENDING, GestureMode.TEXT_DRAG -> {
-                                val c = event.changes.firstOrNull { it.id == primaryId } ?: pressed.first()
-                                val delta = c.positionChange()
-                                travel += delta.getDistance()
-                                if (mode == GestureMode.TEXT_PENDING && travel > slop) {
-                                    if (textHit != null) {
-                                        mode = GestureMode.TEXT_DRAG
-                                        draggingTextId = textHit.id
-                                        textDragDelta = Offset.Zero
-                                        HapticUtil.performToggleOn(haptics)
-                                    } else {
-                                        mode = GestureMode.PAN
-                                    }
-                                }
-                                when (mode) {
-                                    GestureMode.TEXT_DRAG -> textDragDelta += delta / viewport.scale
-                                    GestureMode.PAN -> viewport.panBy(delta)
-                                    else -> {}
-                                }
-                                c.consume()
-                            }
-
-                            GestureMode.DRAW -> {
-                                val c = event.changes.firstOrNull { it.id == primaryId }
-                                if (c == null || !c.pressed) {
-                                    // The stylus lifted while a palm is still down: finish the stroke
-                                    c?.let { addPoint(it, it.position) }
-                                    commitStroke()
-                                    hapticJob?.cancel()
-                                    if (drawingNotified) drawingChange(false)
-                                    drawingNotified = false
-                                    mode = GestureMode.IGNORE
-                                } else {
-                                    c.historical.forEach { h -> addPoint(c, h.position) }
-                                    addPoint(c, c.position)
-                                    travel += c.positionChange().getDistance()
-                                    if (!drawingNotified && travel > slop) {
-                                        drawingNotified = true
-                                        drawingChange(true)
-                                    }
-                                    if (activeTool == ToolType.ERASER) eraseAt(c.position)
-
-                                    // Speed-dependent texture haptics while inking
-                                    val dt = (c.uptimeMillis - lastSpeedTime).coerceAtLeast(1L)
-                                    val dist = (c.position - lastSpeedPos).getDistance()
-                                    speed = speed * 0.6f + (dist / dt * 1000f) * 0.4f
-                                    lastSpeedTime = c.uptimeMillis
-                                    lastSpeedPos = c.position
-                                    if (activeTool == ToolType.PEN && hapticJob == null && drawingNotified) {
-                                        hapticJob = scope.launch {
-                                            while (isActive) {
-                                                val sp = speed
-                                                if (sp < 60f) {
-                                                    delay(180L)
-                                                    continue
-                                                }
-                                                val t = (440f * (1f - (sp.coerceAtMost(300f) / 300f))).toLong() + 10L
-                                                HapticUtil.performLightTick(haptics)
-                                                delay(max(20L, t))
-                                            }
-                                        }
-                                    }
-                                    c.consume()
-                                }
-                            }
-
-                            GestureMode.IGNORE -> event.changes.forEach { it.consume() }
-                        }
-                    }
-
-                    // Gesture finished: every pointer is up
-                    hapticJob?.cancel()
-                    when (mode) {
-                        GestureMode.DRAW -> commitStroke()
-                        GestureMode.TEXT_PENDING -> {
-                            textTap(downWorld, textHit?.id)
-                            HapticUtil.performClick(haptics)
-                        }
-
-                        GestureMode.TEXT_DRAG -> {
-                            val id = draggingTextId
-                            val item = textsNow.firstOrNull { it.id == id }
-                            if (item != null && textDragDelta != Offset.Zero) {
-                                moveText(item.id, item.x + textDragDelta.x, item.y + textDragDelta.y)
-                            }
-                            draggingTextId = null
-                            textDragDelta = Offset.Zero
-                        }
-
-                        GestureMode.TRANSFORM -> {
-                            val quick = lastTime - startTime < MULTI_FINGER_TAP_TIMEOUT_MS
-                            if (fingerGestures && quick && transformTravel < slop * 2) {
-                                when (maxPointers) {
-                                    2 -> {
-                                        undo()
-                                        HapticUtil.performClick(haptics)
-                                    }
-
-                                    3 -> {
-                                        redo()
-                                        HapticUtil.performClick(haptics)
-                                    }
-                                }
-                            }
-                        }
-
-                        else -> {}
-                    }
-                    if (drawingNotified) drawingChange(false)
-                    eraserCursor = null
-                }
+                )
             }
     ) {
-        val scale = viewport.scale
-        val offsetX = viewport.offsetX
-        val offsetY = viewport.offsetY
-
+        // Draw background pattern with canvas transform
+        val backgroundType = SettingsRepository.getCanvasBackground()
         BackgroundDrawer.drawBackgroundOnCompose(
             this,
-            canvasBackground,
+            backgroundType,
             size.width,
             size.height,
-            scale,
-            offsetX,
-            offsetY
+            scale.value,
+            offsetX.value,
+            offsetY.value
         )
 
-        bgImage?.let { imageBitmap ->
+        bgImage.value?.let { imageBitmap ->
+            val drawWidth = imageBitmap.width * scale.value
+            val drawHeight = imageBitmap.height * scale.value
+            val drawOffset = Offset(offsetX.value, offsetY.value)
             drawImage(
                 image = imageBitmap,
-                dstOffset = IntOffset(offsetX.toInt(), offsetY.toInt()),
-                dstSize = IntSize(
-                    (imageBitmap.width * scale).toInt(),
-                    (imageBitmap.height * scale).toInt()
+                dstOffset = androidx.compose.ui.unit.IntOffset(
+                    drawOffset.x.toInt(),
+                    drawOffset.y.toInt()
+                ),
+                dstSize = androidx.compose.ui.unit.IntSize(
+                    drawWidth.toInt(),
+                    drawHeight.toInt()
                 )
             )
         }
 
-        fun screen(p: Offset) = Offset(p.x * scale + offsetX, p.y * scale + offsetY)
-
         strokes.forEach { stroke ->
-            val screenPoints = stroke.points.map(::screen)
+            val screenPoints = stroke.points.map { world ->
+                Offset(
+                    world.x * scale.value + offsetX.value,
+                    world.y * scale.value + offsetY.value
+                )
+            }
             when {
-                stroke.isArrow && screenPoints.size >= 2 -> with(StrokeDrawer) {
-                    drawArrow(screenPoints.first(), screenPoints.last(), stroke.color, stroke.width * scale)
+                stroke.isArrow && screenPoints.size >= 2 -> {
+                    with(StrokeDrawer) {
+                        drawArrow(
+                            screenPoints.first(),
+                            screenPoints.last(),
+                            stroke.color,
+                            stroke.width * scale.value
+                        )
+                    }
                 }
 
-                stroke.shapeType != null && screenPoints.size >= 2 -> with(StrokeDrawer) {
-                    drawShape(
-                        screenPoints.first(),
-                        screenPoints.last(),
-                        stroke.shapeType,
-                        stroke.color,
-                        stroke.width * scale,
-                        stroke.isFilled
-                    )
+                stroke.shapeType != null && screenPoints.size >= 2 -> {
+                    with(StrokeDrawer) {
+                        drawShape(
+                            screenPoints.first(),
+                            screenPoints.last(),
+                            stroke.shapeType,
+                            stroke.color,
+                            stroke.width * scale.value,
+                            stroke.isFilled
+                        )
+                    }
                 }
 
                 stroke.isFromStylus && stroke.stylusPoints != null && stroke.stylusPoints.size >= 2 -> {
+                    // Use pressure-sensitive rendering for stylus strokes
+                    val screenStylusPoints = stroke.stylusPoints.map { sp ->
+                        StylusPoint(
+                            offset = Offset(
+                                sp.offset.x * scale.value + offsetX.value,
+                                sp.offset.y * scale.value + offsetY.value
+                            ),
+                            pressure = sp.pressure,
+                            tilt = sp.tilt,
+                            orientation = sp.orientation
+                        )
+                    }
                     drawPressureSensitiveStroke(
-                        stroke.stylusPoints.map { it.copy(offset = screen(it.offset)) },
+                        screenStylusPoints,
                         stroke.color,
-                        stroke.width * scale,
+                        stroke.width * scale.value,
                         stroke.style
                     )
                 }
 
-                screenPoints.size >= 2 -> drawScribbleStroke(
-                    screenPoints,
-                    stroke.color,
-                    stroke.width * scale,
-                    stroke.style
-                )
+                screenPoints.size >= 2 -> {
+                    drawScribbleStroke(
+                        screenPoints,
+                        stroke.color,
+                        stroke.width * scale.value,
+                        stroke.style
+                    )
+                }
             }
         }
 
         texts.forEach { t ->
-            val delta = if (t.id == draggingTextId) textDragDelta else Offset.Zero
-            val pos = screen(Offset(t.x + delta.x, t.y + delta.y))
-            drawStringWithFont(context, t.text, pos.x, pos.y, t.size * scale, t.color.toArgb())
+            val sx = t.x * scale.value + offsetX.value
+            val sy = t.y * scale.value + offsetY.value
+            val fontSize = t.size * scale.value
+            drawStringWithFont(context, t.text, sx, sy, fontSize, t.color.toArgb())
         }
 
-        // Live preview of the stroke being drawn
-        when (activeTool) {
-            ToolType.PEN -> if (currentStroke.size >= 2) {
-                if (strokeIsStylus && currentStylusPoints.size >= 2) {
-                    drawPressureSensitiveStroke(
-                        currentStylusPoints.map { it.copy(offset = screen(it.offset)) },
-                        currentColor,
-                        penWidth * scale,
-                        currentPenStyle
+        when (currentTool) {
+            ToolType.PEN -> {
+                if (currentStroke.size >= 2) {
+                    if (isCurrentStrokeFromStylus.value && currentStylusPoints.size >= 2) {
+                        // Show pressure-sensitive preview for stylus
+                        val screenStylusPoints = currentStylusPoints.map { sp ->
+                            StylusPoint(
+                                offset = Offset(
+                                    sp.offset.x * scale.value + offsetX.value,
+                                    sp.offset.y * scale.value + offsetY.value
+                                ),
+                                pressure = sp.pressure,
+                                tilt = sp.tilt,
+                                orientation = sp.orientation
+                            )
+                        }
+                        drawPressureSensitiveStroke(
+                            screenStylusPoints,
+                            currentColor,
+                            penWidth * scale.value,
+                            currentPenStyle
+                        )
+                    } else {
+                        val screenPoints = currentStroke.map { world ->
+                            Offset(
+                                world.x * scale.value + offsetX.value,
+                                world.y * scale.value + offsetY.value
+                            )
+                        }
+                        drawScribbleStroke(
+                            screenPoints,
+                            currentColor,
+                            penWidth * scale.value,
+                            currentPenStyle
+                        )
+                    }
+                }
+            }
+
+            ToolType.ARROW -> {
+                if (currentStroke.size >= 2) {
+                    val start = Offset(
+                        currentStroke.first().x * scale.value + offsetX.value,
+                        currentStroke.first().y * scale.value + offsetY.value
                     )
-                } else {
-                    drawScribbleStroke(
-                        currentStroke.map(::screen),
-                        currentColor,
-                        penWidth * scale,
-                        currentPenStyle
+                    val end = Offset(
+                        currentStroke.last().x * scale.value + offsetX.value,
+                        currentStroke.last().y * scale.value + offsetY.value
+                    )
+                    with(StrokeDrawer) {
+                        drawArrow(start, end, currentColor, arrowWidth * scale.value)
+                    }
+                }
+            }
+
+            ToolType.SHAPE -> {
+                if (currentStroke.size >= 2) {
+                    val start = Offset(
+                        currentStroke.first().x * scale.value + offsetX.value,
+                        currentStroke.first().y * scale.value + offsetY.value
+                    )
+                    val end = Offset(
+                        currentStroke.last().x * scale.value + offsetX.value,
+                        currentStroke.last().y * scale.value + offsetY.value
+                    )
+                    with(StrokeDrawer) {
+                        drawShape(
+                            start,
+                            end,
+                            currentShapeType,
+                            currentColor,
+                            shapeWidth * scale.value,
+                            shapeFilled
+                        )
+                    }
+                }
+            }
+
+            ToolType.ERASER -> {
+                if (currentStroke.isNotEmpty()) {
+                    val last = currentStroke.last()
+                    val center = Offset(
+                        last.x * scale.value + offsetX.value,
+                        last.y * scale.value + offsetY.value
+                    )
+                    drawCircle(
+                        color = currentColor.copy(alpha = 0.3f),
+                        radius = eraserRadius,
+                        center = center
                     )
                 }
             }
 
-            ToolType.ARROW -> if (currentStroke.size >= 2) with(StrokeDrawer) {
-                drawArrow(
-                    screen(currentStroke.first()),
-                    screen(currentStroke.last()),
-                    currentColor,
-                    arrowWidth * scale
-                )
-            }
-
-            ToolType.SHAPE -> if (currentStroke.size >= 2) with(StrokeDrawer) {
-                drawShape(
-                    screen(currentStroke.first()),
-                    screen(currentStroke.last()),
-                    currentShapeType,
-                    currentColor,
-                    shapeWidth * scale,
-                    shapeFilled
-                )
-            }
-
             else -> {}
-        }
-
-        // Eraser cursor: a neutral ring that is visible on any background
-        eraserCursor?.let { center ->
-            drawCircle(color = Color.Gray.copy(alpha = 0.18f), radius = eraserRadiusPx, center = center)
-            drawCircle(
-                color = Color.White.copy(alpha = 0.9f),
-                radius = eraserRadiusPx,
-                center = center,
-                style = Stroke(width = 3f)
-            )
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.55f),
-                radius = eraserRadiusPx,
-                center = center,
-                style = Stroke(width = 1.5f)
-            )
         }
     }
 }

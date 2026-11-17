@@ -44,6 +44,12 @@
             android:exported="false"
             android:theme="@style/Theme.Canvas" />
 
+        <!-- fork: redesigned settings screen -->
+        <activity
+            android:name=".fork.settings.ForkSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Canvas" />
+
         <!-- FileProvider for sharing temporary image files -->
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -1,4 +1,4 @@
-package com.sameerasw.canvas.ui.state
+package com.sameerasw.canvas.fork.ui
 
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate

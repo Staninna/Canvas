@@ -1,4 +1,4 @@
-package com.sameerasw.canvas.ui.components.chrome
+package com.sameerasw.canvas.fork.ui.chrome
 
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.AnimatedVisibility

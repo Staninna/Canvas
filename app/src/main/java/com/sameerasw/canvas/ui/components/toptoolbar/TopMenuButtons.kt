@@ -1,0 +1,114 @@
+package com.sameerasw.canvas.ui.components.toptoolbar
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
+import com.sameerasw.canvas.R
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.sameerasw.canvas.utils.HapticUtil
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun TopMenuButtons(
+    visible: Boolean,
+    onShare: () -> Unit,
+    onInvert: () -> Unit,
+    onAddBackground: () -> Unit,
+    onClear: () -> Unit,
+    onSettings: () -> Unit,
+    onAbout: () -> Unit,
+    loadingShare: Boolean = false
+) {
+    val haptics = LocalHapticFeedback.current
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandHorizontally(expandFrom = Alignment.Start, animationSpec = tween(260)) +
+                slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(260)),
+        exit = slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(260)) +
+                shrinkHorizontally(shrinkTowards = Alignment.Start, animationSpec = tween(260))
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = {
+                    HapticUtil.performClick(haptics)
+                    onShare()
+                },
+                enabled = !loadingShare
+            ) {
+                if (loadingShare) {
+                    androidx.compose.material3.LoadingIndicator()
+                } else {
+                    Icon(
+                        painter = painterResource(id = R.drawable.rounded_ios_share_24),
+                        contentDescription = "Share"
+                    )
+                }
+            }
+
+            IconButton(onClick = {
+                HapticUtil.performClick(haptics)
+                onClear()
+            }) {
+                Icon(
+                    painter = painterResource(id = R.drawable.rounded_cleaning_services_24),
+                    contentDescription = "Clear all"
+                )
+            }
+
+            IconButton(onClick = {
+                HapticUtil.performClick(haptics)
+                onInvert()
+            }) {
+                Icon(
+                    painter = painterResource(id = R.drawable.rounded_invert_colors_24),
+                    contentDescription = "Invert tones"
+                )
+            }
+
+            IconButton(onClick = {
+                HapticUtil.performClick(haptics)
+                onAddBackground()
+            }) {
+                Icon(
+                    painter = painterResource(id = R.drawable.rounded_image_24),
+                    contentDescription = "Add background image"
+                )
+            }
+
+            IconButton(onClick = {
+                HapticUtil.performClick(haptics)
+                onSettings()
+            }) {
+                Icon(
+                    painter = painterResource(id = R.drawable.rounded_settings_24),
+                    contentDescription = "Settings"
+                )
+            }
+
+            IconButton(onClick = {
+                HapticUtil.performClick(haptics)
+                onAbout()
+            }) {
+                Icon(
+                    painter = painterResource(id = R.drawable.rounded_info_24),
+                    contentDescription = "About"
+                )
+            }
+        }
+    }
+}
