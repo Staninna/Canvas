@@ -209,6 +209,13 @@ jobs:
           name: release-${{ steps.tag.outputs.tag }}
           path: dist/
 
+      - name: Write release notes
+        # The release commit's message body leads the notes; GitHub's generated list follows.
+        run: |
+          git log -1 --format=%b "$GITHUB_SHA" \
+            | grep -v -E '^(Co-Authored-By|Claude-Session|Signed-off-by):' > release-notes.md || true
+          cat release-notes.md
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -217,4 +224,5 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}
           generate_release_notes: true
+          body_path: release-notes.md
           files: dist/*
