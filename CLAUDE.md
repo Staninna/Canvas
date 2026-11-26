@@ -42,7 +42,10 @@ Rules for fork work:
 
 ### Fork packages
 
-- `fork/ForkCanvasRoot.kt`: entry point from MainActivity (theme + `CanvasApp`).
+- `fork/ForkCanvasRoot.kt`: entry point from MainActivity (theme + `CanvasApp`); owns the
+  background picker.
+- `fork/BackgroundStore.kt`: copies picked backgrounds into `filesDir/backgrounds/` so backups
+  carry them, migrates old `content://` backgrounds, removes unreferenced files once per process.
 - `fork/ForkSettings.kt`: settings as `StateFlow`s.
 - `fork/ui/CanvasApp.kt`: main screen; tool state, dialogs, wiring to the ViewModel.
 - `fork/ui/CanvasSurface.kt`: drawing surface. One gesture detector: one finger/stylus uses the

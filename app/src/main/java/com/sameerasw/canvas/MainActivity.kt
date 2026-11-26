@@ -162,11 +162,6 @@ class MainActivity : ComponentActivity() {
             // Upstream's CanvasApp below is kept unchanged but unused, so syncs merge cleanly.
             com.sameerasw.canvas.fork.ForkCanvasRoot(
                 viewModel = viewModel,
-                onPickBackground = {
-                    pickBackgroundImageLauncher.launch(
-                        androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                },
                 onRequestNotesRole = { requestNotesRole() },
                 onLaunchContentCapture = { launchContentCapture() }
             )
